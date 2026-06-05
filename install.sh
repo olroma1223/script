@@ -1,172 +1,139 @@
 #!/usr/bin/env bash
 
-# Dante SOCKS5 Installer for Debian 11/12
-# Version: 2.0
-
 clear
 
-# Root check
+# =========================
+# CHECK ROOT
+# =========================
 if [[ "$EUID" -ne 0 ]]; then
-    echo "Run this script as root"
+    echo "Run as root"
     exit 1
 fi
 
-# Debian check
+# =========================
+# CHECK DEBIAN
+# =========================
 if [[ ! -f /etc/debian_version ]]; then
-    echo "This installer supports Debian 11/12 only"
+    echo "Debian 11/12 only"
     exit 1
 fi
 
 CONFIG="/etc/sockd.conf"
 
+# =========================
+# FUNCTIONS
+# =========================
+
 add_user() {
 
     echo
-    read -p "Enter username: " -e -i proxyuser USERNAME
+    read -p "Username: " -e -i proxyuser USER
 
     while true; do
-        read -s -p "Enter password: " PASSWORD
+        read -s -p "Password: " PASS
         echo
-        read -s -p "Repeat password: " PASSWORD2
+        read -s -p "Repeat: " PASS2
         echo
-
-        [[ "$PASSWORD" == "$PASSWORD2" ]] && break
-
-        echo
-        echo "Passwords do not match"
-        echo
+        [[ "$PASS" == "$PASS2" ]] && break
+        echo "Mismatch"
     done
 
-    if id "$USERNAME" >/dev/null 2>&1; then
-        echo
-        echo "User already exists"
+    if id "$USER" >/dev/null 2>&1; then
+        echo "User exists"
         return
     fi
 
     useradd -M -s /usr/sbin/nologin \
-        -p "$(openssl passwd -6 "$PASSWORD")" \
-        "$USERNAME"
+        -p "$(openssl passwd -6 "$PASS")" "$USER"
 
-    echo
-    echo "User created successfully"
+    echo "User added"
 }
 
 remove_user() {
 
     echo
-    read -p "Enter username to delete: " DELUSER
+    read -p "User to delete: " U
 
-    if id "$DELUSER" >/dev/null 2>&1; then
-        userdel "$DELUSER"
-        echo
-        echo "User deleted"
+    if id "$U" >/dev/null 2>&1; then
+        userdel "$U"
+        echo "Deleted"
     else
-        echo
-        echo "User not found"
+        echo "Not found"
     fi
 }
 
-remove_proxy() {
+remove_all() {
 
     echo
-    read -p "Remove Dante SOCKS5 completely? [y/n]: " -e -i n REMOVE
+    read -p "Remove proxy? [y/n]: " -e -i n R
 
-    if [[ "$REMOVE" != "y" ]]; then
-        echo
-        echo "Cancelled"
-        return
-    fi
+    [[ "$R" != "y" ]] && return
 
     systemctl stop sockd 2>/dev/null
     systemctl disable sockd 2>/dev/null
 
     apt-get -y remove dante-server
 
-    rm -f /etc/systemd/system/sockd.service
     rm -f /etc/sockd.conf
+    rm -f /etc/systemd/system/sockd.service
 
     systemctl daemon-reload
 
-    echo
-    echo "Dante removed"
+    echo "Removed"
 }
 
+# =========================
+# MENU IF INSTALLED
+# =========================
+
 if [[ -f "$CONFIG" ]]; then
-
     while true; do
-
         clear
-
-        echo "Dante SOCKS5 already installed"
+        echo "Dante SOCKS installed"
         echo
         echo "1) Add user"
         echo "2) Delete user"
-        echo "3) Remove Dante"
+        echo "3) Remove proxy"
         echo "4) Exit"
         echo
 
-        read -p "Select option [1-4]: " OPTION
+        read -p "Select: " O
 
-        case "$OPTION" in
-            1)
-                add_user
-                exit
-                ;;
-            2)
-                remove_user
-                exit
-                ;;
-            3)
-                remove_proxy
-                exit
-                ;;
-            4)
-                exit
-                ;;
+        case "$O" in
+            1) add_user; exit ;;
+            2) remove_user; exit ;;
+            3) remove_all; exit ;;
+            4) exit ;;
         esac
-
     done
 fi
 
-echo "Installing Dante SOCKS5..."
+# =========================
+# INSTALL
+# =========================
+
+echo "Installing Dante..."
 
 INTERFACE=$(ip route get 8.8.8.8 | awk '{print $5; exit}')
 
-read -p "Enter SOCKS5 port: " -e -i 1080 PORT
-
-echo
-
-read -p "Enter username: " -e -i proxyuser USERNAME
+read -p "Port: " -e -i 1080 PORT
+read -p "User: " -e -i proxyuser USER
 
 while true; do
-
-    read -s -p "Enter password: " PASSWORD
+    read -s -p "Password: " PASS
     echo
-
-    read -s -p "Repeat password: " PASSWORD2
+    read -s -p "Repeat: " PASS2
     echo
-
-    [[ "$PASSWORD" == "$PASSWORD2" ]] && break
-
-    echo
-    echo "Passwords do not match"
-    echo
-
+    [[ "$PASS" == "$PASS2" ]] && break
 done
 
 apt-get update
-
-apt-get -y install \
-    dante-server \
-    openssl \
-    curl \
-    ufw
+apt-get -y install dante-server openssl curl ufw
 
 useradd -M -s /usr/sbin/nologin \
-    -p "$(openssl passwd -6 "$PASSWORD")" \
-    "$USERNAME"
+    -p "$(openssl passwd -6 "$PASS")" "$USER"
 
-cat > /etc/sockd.conf << EOF
+cat > /etc/sockd.conf <<EOF
 logoutput: syslog
 
 internal: ${INTERFACE} port = ${PORT}
@@ -179,26 +146,45 @@ socksmethod: username
 
 client pass {
     from: 0.0.0.0/0 to: 0.0.0.0/0
-    log: connect disconnect error
+    log: connect error
 }
 
 socks pass {
     from: 0.0.0.0/0 to: 0.0.0.0/0
     command: connect bind udpassociate
     socksmethod: username
-    log: connect disconnect error
+    log: connect error
 }
 EOF
 
-cat > /etc/systemd/system/sockd.service << 'EOF'
+# =========================
+# AUTO DETECT BINARY
+# =========================
+
+SOCKD_BIN=""
+
+if [[ -x /usr/sbin/sockd ]]; then
+    SOCKD_BIN="/usr/sbin/sockd"
+elif [[ -x /usr/sbin/danted ]]; then
+    SOCKD_BIN="/usr/sbin/danted"
+else
+    echo "Dante not installed correctly"
+    exit 1
+fi
+
+# =========================
+# SYSTEMD SERVICE
+# =========================
+
+cat > /etc/systemd/system/sockd.service <<EOF
 [Unit]
 Description=Dante SOCKS5 Proxy
 After=network.target
 
 [Service]
 Type=forking
-ExecStart=/usr/sbin/sockd -D -f /etc/sockd.conf
-ExecReload=/bin/kill -HUP $MAINPID
+ExecStart=${SOCKD_BIN} -D -f /etc/sockd.conf
+ExecReload=/bin/kill -HUP \$MAINPID
 Restart=always
 
 [Install]
@@ -209,23 +195,24 @@ systemctl daemon-reload
 systemctl enable sockd
 systemctl restart sockd
 
+# =========================
+# FIREWALL
+# =========================
+
 if command -v ufw >/dev/null 2>&1; then
     ufw allow ${PORT}/tcp >/dev/null 2>&1
     ufw allow ${PORT}/udp >/dev/null 2>&1
 fi
 
-SERVER_IP=$(curl -4 -s https://api.ipify.org)
+IP=$(curl -4 -s https://api.ipify.org)
 
 clear
 
-echo "======================================"
-echo "Dante SOCKS5 installed successfully"
-echo "======================================"
-echo
-echo "IP       : ${SERVER_IP}"
-echo "PORT     : ${PORT}"
-echo "USERNAME : ${USERNAME}"
-echo "PASSWORD : ${PASSWORD}"
-echo
-echo "SOCKS5 is ready to use"
-echo
+echo "============================"
+echo "SOCKS5 READY"
+echo "============================"
+echo "IP: $IP"
+echo "PORT: $PORT"
+echo "USER: $USER"
+echo "PASS: $PASS"
+echo "============================"
