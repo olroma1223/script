@@ -131,11 +131,10 @@ apt-get update
 apt-get -y install dante-server openssl curl ufw
 
 useradd -M -s /usr/sbin/nologin \
-    -p "$(openssl passwd -6 "$PASS")" "$USER"
+    -p "$(openssl passwd -6 "$PASS")" \
+    "$USER"
 
 cat > /etc/sockd.conf <<EOF
-logoutput: syslog
-
 internal: ${INTERFACE} port = ${PORT}
 external: ${INTERFACE}
 
@@ -146,14 +145,12 @@ socksmethod: username
 
 client pass {
     from: 0.0.0.0/0 to: 0.0.0.0/0
-    log: connect error
 }
 
 socks pass {
     from: 0.0.0.0/0 to: 0.0.0.0/0
     command: connect bind udpassociate
     socksmethod: username
-    log: connect error
 }
 EOF
 
@@ -209,7 +206,7 @@ IP=$(curl -4 -s https://api.ipify.org)
 clear
 
 echo "============================"
-echo "SOCKS5 READY"
+echo "SOCKS5 READY (NO LOGS)"
 echo "============================"
 echo "IP: $IP"
 echo "PORT: $PORT"
